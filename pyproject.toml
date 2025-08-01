@@ -45,11 +45,11 @@ dev-dependencies = [
     "ruff>=0.5.0",
     "pyright>=1.1.403",
     "pre-commit>=4.1.0",
+    "yamllint>=1.37.1",
+    "yamlfix>=1.16.0",
     # Documentation
     "mkdocs-material>=9.6.0",
     "mkdocs-static-i18n>=1.2.0",
-    "yamllint>=1.37.1",
-    "yamlfix>=1.16.0",
 ]
 
 [tool.uv.sources]

@@ -161,7 +161,7 @@ publish-pre VERSION:
         exit 1; \
     fi
     @echo "更新版本号到 {{VERSION}}..."
-    @sed -i.bak 's/version = ".*"/version = "{{VERSION}}"/' pyproject.toml && rm pyproject.toml.bak
+    @sed -i.bak '/^version = /s/version = ".*"/version = "{{VERSION}}"/' pyproject.toml && rm pyproject.toml.bak
     just build
     @if [ -f .pypi ]; then \
         export $(cat .pypi) && uv publish; \
@@ -179,7 +179,7 @@ publish-release VERSION:
         exit 1; \
     fi
     @echo "更新版本号到 {{VERSION}}..."
-    @sed -i.bak 's/version = ".*"/version = "{{VERSION}}"/' pyproject.toml && rm pyproject.toml.bak
+    @sed -i.bak '/^version = /s/version = ".*"/version = "{{VERSION}}"/' pyproject.toml && rm pyproject.toml.bak
     just build
     @if [ -f .pypi ]; then \
         export $(cat .pypi) && uv publish; \
