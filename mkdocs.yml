@@ -109,6 +109,10 @@ plugins:
             Home: 首页
             Getting Started: 开始使用
             API Reference: API 参考
+            Query API: 查询 API
+            Streaming API: 流式 API
+            Data Models: 数据模型
+            Filtering: 过滤
             Examples: 示例
       reconfigure_material: true
       reconfigure_search: true

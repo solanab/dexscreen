@@ -1019,6 +1019,6 @@ if __name__ == "__main__":
 更多详情，请参见：
 
 - [入门指南](getting-started.zh.md) - 安装和基础知识
-- [查询 API](query-api.zh.md) - 所有查询方法
-- [流式 API](streaming-api.zh.md) - 实时订阅
-- [过滤](filtering.zh.md) - 高级过滤选项
+- [查询 API](api/query-api.zh.md) - 所有查询方法
+- [流式 API](api/streaming-api.zh.md) - 实时订阅
+- [过滤](api/filtering.zh.md) - 高级过滤选项

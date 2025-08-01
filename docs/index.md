@@ -102,7 +102,7 @@ asyncio.run(main())
 
 > **📖 Learn More**: See [Examples](examples.md) for complete, production-ready code examples.
 >
-> **🔍 Need Help?** Check our [troubleshooting section](#-need-help) below or browse the [Examples](examples.md) for
+> **🔍 Need Help?** Check our [troubleshooting section](#need-help) below or browse the [Examples](examples.md) for
 > common patterns.
 
 ## 📊 API Quick Reference
@@ -229,10 +229,10 @@ liquidity_config = FilterConfig(
 
 > **🔗 More Examples**: Visit the [Examples page](examples.md) for complete, production-ready implementations.
 >
-> **📊 Performance Tips**: See our [performance optimization](#-best-practices) section and
+> **📊 Performance Tips**: See our [performance optimization](#best-practices) section and
 > [filtering guide](api/filtering.md) for best practices.
 
-## 📋 Best Practices
+## Best Practices
 
 ### ⚡ Performance Optimization
 
@@ -315,7 +315,7 @@ print(f"Active subscriptions: {len(active)}")
 
 ---
 
-## 🆘 Need Help?
+## Need Help?
 
 | Issue Type           | Resource                                                                    |
 | -------------------- | --------------------------------------------------------------------------- |
@@ -329,6 +329,6 @@ print(f"Active subscriptions: {len(active)}")
 
 ## 📄 License
 
-**MIT License** - See [LICENSE](../LICENSE) file for complete terms and conditions.
+**MIT License** - See [LICENSE](https://github.com/yourusername/dexscreen/blob/main/LICENSE) file for complete terms and conditions.
 
 > **🙏 Contributing**: We welcome contributions! Please read our contributing guidelines in the GitHub repository.

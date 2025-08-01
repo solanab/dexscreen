@@ -23,17 +23,17 @@ API 提供了稳定、可靠且功能丰富的接口，支持实时 DeFi 数据�
 - **[入门指南](getting-started.zh.md)** - 安装、基本设置和首次查询
 - **[示例](examples.zh.md)** - 常见用例的完整可运行示例
 
-> **💡 新用户路径**：[入门指南](getting-started.zh.md) → [示例](examples.zh.md) → [查询 API](query-api.zh.md) →
-> [流式 API](streaming-api.zh.md)
+> **💡 新用户路径**：[入门指南](getting-started.zh.md) → [示例](examples.zh.md) → [查询 API](api/query-api.zh.md) →
+> [流式 API](api/streaming-api.zh.md)
 
 ### 📖 API 参考
 
-- **[查询 API](query-api.zh.md)** - 一次性数据获取的所有查询方法综合指南
-- **[流式 API](streaming-api.zh.md)** - 持续更新的实时订阅方法
-- **[数据模型](data-models.zh.md)** - 所有数据结构和类型的完整参考
-- **[过滤器](filtering.zh.md)** - 高级过滤、速率限制和性能优化
+- **[查询 API](api/query-api.zh.md)** - 一次性数据获取的所有查询方法综合指南
+- **[流式 API](api/streaming-api.zh.md)** - 持续更新的实时订阅方法
+- **[数据模型](api/data-models.zh.md)** - 所有数据结构和类型的完整参考
+- **[过滤器](api/filtering.zh.md)** - 高级过滤、速率限制和性能优化
 
-> **⚠️ 重要**：处理 API 响应时请务必查看[数据模型](data-models.zh.md)参考。
+> **⚠️ 重要**：处理 API 响应时请务必查看[数据模型](api/data-models.zh.md)参考。
 
 ## ⚡ 快速开始
 
@@ -101,11 +101,11 @@ asyncio.run(main())
 
 > **📖 了解更多**：查看[示例](examples.zh.md)获取完整的生产就绪代码示例。
 >
-> **🔍 需要帮助？**：查看下方的[疑难解答](#-需要帮助)部分或浏览[示例](examples.zh.md)了解常见模式。
+> **🔍 需要帮助？**：查看下方的[疑难解答](#需要帮助)部分或浏览[示例](examples.zh.md)了解常见模式。
 
 ## 📊 API 快速参考
 
-### 🔍 查询方法（[完整参考](query-api.zh.md)）
+### 🔍 查询方法（[完整参考](api/query-api.zh.md)）
 
 | 方法                                                  | 描述                       | 速率限制 | 使用场景       |
 | ----------------------------------------------------- | -------------------------- | -------- | -------------- |
@@ -116,7 +116,7 @@ asyncio.run(main())
 | `get_latest_token_profiles()`                         | 最新代币档案               | 60/分钟  | 新代币跟踪     |
 | `get_latest_boosted_tokens()`                         | 最新推广代币               | 60/分钟  | 推广代币       |
 
-### 📡 流式方法（[完整参考](streaming-api.zh.md)）
+### 📡 流式方法（[完整参考](api/streaming-api.zh.md)）
 
 | 方法                                                    | 描述                 | 最适用于       |
 | ------------------------------------------------------- | -------------------- | -------------- |
@@ -227,9 +227,9 @@ liquidity_config = FilterConfig(
 
 > **🔗 更多示例**：访问[示例页面](examples.zh.md)获取完整的生产就绪实现。
 
-> **📊 性能提示**：查看我们的[性能优化](#-最佳实践)部分和[过滤指南](filtering.zh.md)了解最佳实践。
+> **📊 性能提示**：查看我们的[性能优化](#最佳实践)部分和[过滤指南](api/filtering.zh.md)了解最佳实践。
 
-## 📋 最佳实践
+## 最佳实践
 
 ### ⚡ 性能优化
 
@@ -246,7 +246,7 @@ liquidity_config = FilterConfig(
    interval=30.0
    ```
 
-2. **🔍 应用智能过滤** - [了解更多](filtering.zh.md)
+2. **🔍 应用智能过滤** - [了解更多](api/filtering.zh.md)
 
    ```python
    # 仅显著变化
@@ -299,7 +299,7 @@ print(f"活动订阅数: {len(active)}")
 
 ### 📚 文档与代码
 
-- **[📖 完整 API 文档](query-api.zh.md)** - 详细的方法参考
+- **[📖 完整 API 文档](api/query-api.zh.md)** - 详细的方法参考
 - **[🎯 入门教程](getting-started.zh.md)** - 分步设置指南
 - **[💡 实用示例](examples.zh.md)** - 生产就绪代码示例
 - **[GitHub 仓库](https://github.com/yourusername/dexscreen)** - 源代码和问题反馈
@@ -312,12 +312,12 @@ print(f"活动订阅数: {len(active)}")
 
 ---
 
-## 🆘 需要帮助？
+## 需要帮助？
 
 | 问题类型     | 资源                                                                        |
 | ------------ | --------------------------------------------------------------------------- |
 | **快速开始** | [入门指南](getting-started.zh.md)                                           |
-| **API 问题** | [查询 API](query-api.zh.md) 或 [流式 API](streaming-api.zh.md)              |
+| **API 问题** | [查询 API](api/query-api.zh.md) 或 [流式 API](api/streaming-api.zh.md)              |
 | **代码示例** | [示例页面](examples.zh.md)                                                  |
 | **错误报告** | [GitHub Issues](https://github.com/yourusername/dexscreen/issues)           |
 | **功能请求** | [GitHub Discussions](https://github.com/yourusername/dexscreen/discussions) |
@@ -326,6 +326,6 @@ print(f"活动订阅数: {len(active)}")
 
 ## 📄 许可证
 
-**MIT 许可证** - 查看 [LICENSE](../LICENSE) 文件了解完整条款和条件。
+**MIT 许可证** - 查看 [LICENSE](https://github.com/yourusername/dexscreen/blob/main/LICENSE) 文件了解完整条款和条件。
 
 > **🙏 贡献**：我们欢迎贡献！请阅读 GitHub 仓库中的贡献指南。
