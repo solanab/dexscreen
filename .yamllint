@@ -1,0 +1,32 @@
+extends: default
+
+rules:
+  line-length:
+    max: 120
+    level: warning
+  truthy:
+    allowed-values: ['true', 'false', 'on', 'off']
+  document-start:
+    present: false  # 不强制要求文档开头的 ---
+  comments:
+    min-spaces-from-content: 1  # 注释前至少1个空格
+
+yaml-files:
+  - '*.yaml'
+  - '*.yml'
+
+ignore: |
+  .venv/
+  site/
+  htmlcov/
+  .pytest_cache/
+  .ruff_cache/
+  .pyright/
+  .git/
+  pnpm-lock.yaml
+
+# 允许 Python 标签
+allowed-tags:
+  - "tag:yaml.org,2002:python/name:*"
+  - "!ENV"
+  - "!relative"

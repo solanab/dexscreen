@@ -1,0 +1,15 @@
+{
+  "printWidth": 120,
+  "proseWrap": "always",
+  "singleQuote": false,
+  "trailingComma": "es5",
+  "endOfLine": "lf",
+  "overrides": [
+    {
+      "files": "*.md",
+      "options": {
+        "proseWrap": "always"
+      }
+    }
+  ]
+}

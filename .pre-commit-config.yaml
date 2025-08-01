@@ -1,0 +1,77 @@
+# 精简版 pre-commit 配置 - 使用 ruff 替代大部分功能
+repos:
+  # Ruff - Python linter 和 formatter (替代了很多 pre-commit-hooks)
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check (linting)
+        entry: ruff check --fix
+        language: system
+        types:
+          - python
+        require_serial: true
+      - id: ruff-format
+        name: ruff format
+        entry: ruff format
+        language: system
+        types:
+          - python
+        require_serial: true
+
+  # Pyright - 类型检查
+  - repo: local
+    hooks:
+      - id: pyright
+        name: pyright type check
+        entry: pyright
+        language: system
+        types:
+          - python
+        pass_filenames: false
+        # 只在这些目录运行
+        files: ^(dexscreen|tests|examples)/.*\.py$
+
+  # 只保留 ruff 不能处理的必要检查
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-json
+      - id: check-toml
+      - id: check-added-large-files
+      - id: check-merge-conflict
+
+  # yamllint 替代 check-yaml，支持自定义标签
+  - repo: local
+    hooks:
+      - id: yamllint
+        name: yamllint
+        entry: yamllint
+        language: system
+        types:
+          - yaml
+        args:
+          - -c=.yamllint
+
+  # yamlfix - YAML formatter
+  - repo: local
+    hooks:
+      - id: yamlfix
+        name: yamlfix
+        entry: yamlfix
+        language: system
+        types:
+          - yaml
+        args:
+          - --config-file
+          - pyproject.toml
+
+  # prettier - Markdown formatting
+  - repo: local
+    hooks:
+      - id: prettier
+        name: prettier markdown format
+        entry: pnpm prettier --write
+        language: system
+        types:
+          - markdown
+        require_serial: true

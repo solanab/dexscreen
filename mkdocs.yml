@@ -1,0 +1,114 @@
+site_name: Dexscreen
+site_author: solanab
+repo_url: https://github.com/solanab/dexscreen
+repo_name: solanab/dexscreen
+copyright: Copyright &copy; 2025 solanab
+site_description: A stable and reliable Python SDK for the Dexscreener.com API
+remote_branch: gh-pages
+
+theme:
+  name: material
+  icon:
+    logo: material/finance
+    admonition:
+      question: material/new-box
+  palette:
+    - media: (prefers-color-scheme)
+      toggle:
+        icon: material/link
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: white
+      toggle:
+        icon: material/toggle-switch
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      toggle:
+        icon: material/toggle-switch-off
+        name: Switch to system preference
+  features:
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.indexes
+    - navigation.expand
+    - navigation.sections
+    - header.autohide
+    - content.code.copy
+    - content.code.select
+    - content.code.annotate
+
+nav:
+  - Home:
+      - index.md
+  - Getting Started:
+      - getting-started.md
+  - API Reference:
+      - Query API: api/query-api.md
+      - Streaming API: api/streaming-api.md
+      - Data Models: api/data-models.md
+      - Filtering: api/filtering.md
+  - Examples: examples.md
+
+markdown_extensions:
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.details
+  - pymdownx.critic
+  - pymdownx.caret
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.tilde
+  - pymdownx.magiclink
+  - admonition
+  - attr_list
+  - md_in_html
+  - footnotes
+  - def_list
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/solanab/dexscreen
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/dexscreen/
+  generator: false
+
+plugins:
+  - search
+  - i18n:
+      docs_structure: suffix
+      fallback_to_default: true
+      languages:
+        - build: true
+          default: true
+          locale: en
+          name: English
+        - build: true
+          default: false
+          locale: zh
+          name: 简体中文
+          nav_translations:
+            Home: 首页
+            Getting Started: 开始使用
+            API Reference: API 参考
+            Examples: 示例
+      reconfigure_material: true
+      reconfigure_search: true
