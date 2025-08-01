@@ -4,11 +4,11 @@ on:
   push:
     branches: [main]
     paths:
-      - 'docs/**'
-      - 'mkdocs.yml'
-      - '.github/workflows/docs.yml'
-      - 'README.md'
-      - 'dexscreen/**/*.py'  # API changes might need doc updates
+      - "docs/**"
+      - "mkdocs.yml"
+      - ".github/workflows/docs.yml"
+      - "README.md"
+      - "dexscreen/**/*.py" # API changes might need doc updates
   workflow_dispatch:
 
 permissions:
@@ -45,6 +45,6 @@ jobs:
           publish_dir: ./site
           publish_branch: gh-pages
           force_orphan: true
-          user_name: 'github-actions[bot]'
-          user_email: 'github-actions[bot]@users.noreply.github.com'
-          commit_message: 'Deploy docs from ${{ github.sha }}'
+          user_name: "github-actions[bot]"
+          user_email: "github-actions[bot]@users.noreply.github.com"
+          commit_message: "Deploy docs from ${{ github.sha }}"
