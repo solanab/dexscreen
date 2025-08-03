@@ -25,7 +25,10 @@ class TokenMonitor:
     """Monitor all pairs for specific tokens"""
 
     def __init__(self):
-        self.client = DexscreenerClient()
+        # Use stable timeout for continuous monitoring (20 seconds)
+        # For faster updates, use: DexscreenerClient(client_kwargs={"timeout": 10})
+        # For poor networks, use: DexscreenerClient(client_kwargs={"timeout": 45})
+        self.client = DexscreenerClient(client_kwargs={"timeout": 20})
         self.pair_stats = {}  # Track stats per pair
 
     def format_price(self, price: float) -> str:

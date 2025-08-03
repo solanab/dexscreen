@@ -3,7 +3,7 @@ Test dynamic configuration features of HttpClientCffi
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from dexscreen.core.http import HttpClientCffi
 
@@ -48,22 +48,31 @@ def test_dynamic_config_updates():
 async def test_update_config_method():
     """Test the update_config method for hot configuration updates"""
 
-    # Initialize client
-    client = HttpClientCffi(
-        calls=60,
-        period=60,
-        base_url="https://api.dexscreener.com",
-        client_kwargs={"timeout": 10, "verify": True},
-    )
+    # Use monkeypatch approach instead
+    import dexscreen.core.http
 
-    # Mock the AsyncSession to avoid real network calls
-    with patch("dexscreen.core.http.AsyncSession") as mock_session_class:
-        # Create a mock session instance
+    original_async_session = dexscreen.core.http.AsyncSession
+
+    # Create a mock session instance that will be used for all new sessions
+    def create_mock_session(**kwargs):
         mock_session = AsyncMock()
-        mock_response = MagicMock()
+        mock_response = AsyncMock()
         mock_response.status_code = 200  # Successful warmup
         mock_session.get.return_value = mock_response
-        mock_session_class.return_value = mock_session
+        mock_session.close = AsyncMock()  # Add close method
+        return mock_session
+
+    try:
+        # Replace the imported AsyncSession in the http module
+        dexscreen.core.http.AsyncSession = create_mock_session
+
+        # Initialize client AFTER patching
+        client = HttpClientCffi(
+            calls=60,
+            period=60,
+            base_url="https://api.dexscreener.com",
+            client_kwargs={"timeout": 10, "verify": True},
+        )
 
         # Test 1: Update single configuration
         await client.update_config({"timeout": 20})
@@ -82,6 +91,7 @@ async def test_update_config_method():
         # Test 3: Update proxy configuration
         await client.update_config({"proxy": "http://proxy:8080"})
         config = client.get_current_config()
+        assert "proxy" in config
         assert config["proxy"] == "http://proxy:8080"
 
         # Test 4: Disable proxy
@@ -96,57 +106,76 @@ async def test_update_config_method():
         assert config["impersonate"] == "chrome136"
         assert "verify" not in config  # Should be removed
         assert "headers" not in config  # Should be removed
+    finally:
+        # Restore original import
+        dexscreen.core.http.AsyncSession = original_async_session
 
 
 async def test_dynamic_requests():
     """Test making actual requests with dynamic configuration"""
 
-    client = HttpClientCffi(calls=300, period=60, base_url="https://api.dexscreener.com")
+    # Test with mocked requests to avoid hitting real API
+    # Mock sync session for regular requests
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {"schemaVersion": "1.0.0", "pairs": None}
+    mock_response.raise_for_status = MagicMock()
+    mock_response.content = b'{"schemaVersion": "1.0.0", "pairs": null}'
 
-    # Test with initial configuration
-    result = client.request("GET", "/latest/dex/tokens/solana?limit=5")
-    if result and isinstance(result, list):
-        pass
+    mock_session_instance = MagicMock()
+    mock_session_instance.request.return_value = mock_response
+    mock_session_instance.get.return_value = mock_response  # For warmup request
 
-    # Update configuration and test again
-    client.update_client_kwargs({"impersonate": "firefox135", "timeout": 15})
+    # Mock async session
+    mock_async_response = MagicMock()  # Use MagicMock for the response object
+    mock_async_response.status_code = 200
+    mock_async_response.headers = {"content-type": "application/json"}
+    mock_async_response.json = AsyncMock(return_value={"schemaVersion": "1.0.0", "pairs": None})
+    mock_async_response.raise_for_status = MagicMock()  # Use MagicMock here to avoid warning
+    mock_async_response.content = b'{"schemaVersion": "1.0.0", "pairs": null}'
 
-    result = await client.request_async("GET", "/latest/dex/tokens/solana?limit=5")
-    if result and isinstance(result, list):
-        pass
+    mock_async = AsyncMock()
+    mock_async.request.return_value = mock_async_response
+    mock_async.get.return_value = mock_async_response
 
-    # Test proxy update (mock to avoid actual proxy requirement)
-    with (
-        patch("curl_cffi.requests.Session") as mock_sync_session,
-        patch("dexscreen.core.http.AsyncSession") as mock_async_session,
-    ):
-        # Mock sync session for regular requests
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.headers = {"content-type": "application/json"}
-        mock_response.json.return_value = [{"name": "Test Token"}]
-        mock_response.raise_for_status = MagicMock()
+    # Use monkeypatch instead of patch to ensure we override the imported Session
+    import dexscreen.core.http
 
-        mock_session_instance = MagicMock()
-        mock_session_instance.request.return_value = mock_response
-        mock_sync_session.return_value.__enter__.return_value = mock_session_instance
+    original_session = dexscreen.core.http.Session
+    original_async_session = dexscreen.core.http.AsyncSession
 
-        # Mock async session for update_config warmup
-        mock_async = AsyncMock()
-        mock_warmup_response = MagicMock()
-        mock_warmup_response.status_code = 200  # Successful warmup
-        mock_async.get.return_value = mock_warmup_response
-        mock_async_session.return_value = mock_async
+    try:
+        # Replace the imported Session and AsyncSession in the http module
+        dexscreen.core.http.Session = lambda **kwargs: mock_session_instance
+        dexscreen.core.http.AsyncSession = lambda **kwargs: mock_async
+
+        client = HttpClientCffi(calls=300, period=60, base_url="https://api.dexscreener.com")
+
+        # Test with initial configuration
+        result = client.request("GET", "/latest/dex/tokens/solana?limit=5")
+        assert result == {"schemaVersion": "1.0.0", "pairs": None}
+
+        # Update configuration and test again
+        client.update_client_kwargs({"impersonate": "firefox135", "timeout": 15})
+
+        result = await client.request_async("GET", "/latest/dex/tokens/solana?limit=5")
+        assert result == {"schemaVersion": "1.0.0", "pairs": None}
 
         # Update proxy using update_config
         await client.update_config({"proxy": "http://test-proxy:8080"})
 
-        # Make request
+        # Make request with updated proxy
         result = client.request("GET", "/test")
+        assert result == {"schemaVersion": "1.0.0", "pairs": None}
 
         # Verify proxy configuration
         config = client.get_current_config()
         assert config.get("proxy") == "http://test-proxy:8080"
+    finally:
+        # Restore original imports
+        dexscreen.core.http.Session = original_session
+        dexscreen.core.http.AsyncSession = original_async_session
 
 
 async def test_thread_safety():

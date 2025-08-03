@@ -15,9 +15,13 @@ logger = logging.getLogger(__name__)
 
 async def main():
     """Demonstrates all basic API async calls"""
+    # Initialize client with default 10-second timeout
+    # For faster responses, use: DexscreenerClient(client_kwargs={"timeout": 5})
+    # For stable connections, use: DexscreenerClient(client_kwargs={"timeout": 30})
     client = DexscreenerClient()
 
     logger.info("Starting DexScreener Python SDK - Async API Example")
+    logger.info("Using default timeout: 10 seconds")
 
     # 1. Single pair query
     logger.info("Example 1: Query single pair (method: get_pair_async)")

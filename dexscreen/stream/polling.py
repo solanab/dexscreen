@@ -4,10 +4,14 @@ Unified streaming interface
 
 import asyncio
 import logging
+import time
 from abc import ABC, abstractmethod
 from typing import Callable, Optional
 
+from ..core.exceptions import HttpError
 from ..core.models import TokenPair
+from ..utils.logging_config import get_contextual_logger
+from ..utils.retry import RetryConfig, RetryManager, RetryPresets
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +23,18 @@ class StreamingClient(ABC):
         self.subscriptions: dict[str, set[Callable]] = {}
         self.running = False
         self.callback_errors: dict[str, int] = {}  # Track errors per subscription
+
+        # Enhanced logging
+        self.contextual_logger = get_contextual_logger(__name__)
+
+        # Streaming statistics
+        self.stats = {
+            "total_subscriptions": 0,
+            "active_subscriptions": 0,
+            "total_emissions": 0,
+            "total_callback_errors": 0,
+            "last_emission_time": None,
+        }
 
     @abstractmethod
     async def connect(self):
@@ -89,17 +105,57 @@ class StreamingClient(ABC):
             return self.callback_errors.get(key, 0)
         return sum(self.callback_errors.values())
 
+    def get_streaming_stats(self) -> dict:
+        """Get comprehensive streaming statistics"""
+        combined_stats = self.stats.copy()
+        if hasattr(self, "polling_stats"):
+            combined_stats.update(self.polling_stats)  # type: ignore[attr-defined]
+        combined_stats.update(
+            {
+                "total_callback_errors": sum(self.callback_errors.values()),
+                "subscriptions_with_errors": len([k for k, v in self.callback_errors.items() if v > 0]),
+                "running": self.running,
+            }
+        )
+        return combined_stats
+
 
 class PollingStream(StreamingClient):
     """Polling implementation with streaming interface"""
 
-    def __init__(self, dexscreener_client, interval: float = 1.0, filter_changes: bool = True):
+    def __init__(
+        self,
+        dexscreener_client,
+        interval: float = 1.0,
+        filter_changes: bool = True,
+        retry_config: Optional[RetryConfig] = None,
+    ):
         super().__init__()
         self.dexscreener_client = dexscreener_client  # The main DexscreenerClient instance
         self.interval = interval  # Default interval
         self.filter_changes = filter_changes  # Whether to filter for changes
+        self.retry_config = retry_config or RetryPresets.network_operations()  # Conservative retry for polling
         self.tasks: dict[str, asyncio.Task] = {}
         self._cache: dict[str, Optional[TokenPair]] = {}
+
+        # Enhanced polling statistics
+        self.polling_stats = {
+            "total_polls": 0,
+            "successful_polls": 0,
+            "failed_polls": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "average_poll_duration": 0.0,
+            "last_poll_time": None,
+        }
+
+        init_context = {
+            "interval": interval,
+            "filter_changes": filter_changes,
+            "polling_mode": "http",
+        }
+
+        self.contextual_logger.debug("PollingStream initialized", context=init_context)
 
         # Data structures for chain-based polling (max 30 per chain)
         self._chain_subscriptions: dict[str, set[str]] = {}  # chain -> set of addresses
@@ -114,7 +170,17 @@ class PollingStream(StreamingClient):
 
     async def connect(self):
         """Start streaming service"""
+        connect_context = {
+            "operation": "connect",
+            "previous_state": "running" if self.running else "stopped",
+        }
+
+        self.contextual_logger.info("Starting polling stream service", context=connect_context)
+
         self.running = True
+
+        connect_context.update({"current_state": "running"})
+        self.contextual_logger.info("Polling stream service started", context=connect_context)
 
     async def disconnect(self):
         """Stop all polling tasks"""
@@ -227,7 +293,6 @@ class PollingStream(StreamingClient):
 
     async def _poll_chain(self, chain_id: str):
         """Poll all pairs for a specific chain (max 30 per chain)"""
-        import time
 
         next_poll_time = time.time()
 
@@ -253,7 +318,6 @@ class PollingStream(StreamingClient):
 
     async def _batch_fetch_and_emit(self, chain_id: str):
         """Fetch multiple pairs for a chain and emit updates"""
-        import time
 
         if chain_id not in self._chain_subscriptions:
             return
@@ -273,51 +337,151 @@ class PollingStream(StreamingClient):
             )
             addresses = addresses[:max_subscriptions]
 
-        try:
-            # Log API request time
-            request_start = time.time()
+        retry_manager = RetryManager(self.retry_config)
 
-            # Fetch all pairs in one request (max 30 due to limit above)
-            pairs = await self.dexscreener_client.get_pairs_by_pairs_addresses_async(chain_id, addresses)
+        while True:
+            try:
+                # Log API request time
+                request_start = time.time()
 
-            request_end = time.time()
-            request_duration = request_end - request_start
+                # Fetch all pairs in one request (max 30 due to limit above)
+                pairs = await self.dexscreener_client.get_pairs_by_pairs_addresses_async(chain_id, addresses)
 
-            logger.debug(
-                "Batch fetch completed for chain %s: %d addresses, %d pairs returned in %.2fms",
-                chain_id,
-                len(addresses),
-                len(pairs),
-                request_duration * 1000,
-            )
+                request_end = time.time()
+                request_duration = request_end - request_start
 
-            # Create a mapping for quick lookup
-            pairs_map = {pair.pair_address.lower(): pair for pair in pairs}
+                # Update polling statistics
+                self.polling_stats["total_polls"] += 1
+                self.polling_stats["successful_polls"] += 1
+                self.polling_stats["last_poll_time"] = request_end
 
-            # Process each address
-            for address in addresses:
-                key = f"{chain_id}:{address}"
-                pair = pairs_map.get(address.lower())
+                # Update average poll duration
+                total_polls = self.polling_stats["total_polls"]
+                current_avg = self.polling_stats["average_poll_duration"]
+                self.polling_stats["average_poll_duration"] = (
+                    current_avg * (total_polls - 1) + request_duration
+                ) / total_polls
 
-                if pair:
-                    # Add request timing info to the pair object for debugging
-                    pair._request_duration = request_duration
-                    pair._request_time = request_end
+                logger.debug(
+                    "Batch fetch completed for chain %s: %d addresses, %d pairs returned in %.2fms",
+                    chain_id,
+                    len(addresses),
+                    len(pairs),
+                    request_duration * 1000,
+                )
 
-                    # Check if we should filter for changes
-                    if self.filter_changes:
-                        # Only emit if data changed
-                        if self._has_changed(key, pair):
-                            self._cache[key] = pair
+                # Create a mapping for quick lookup
+                pairs_map = {pair.pair_address.lower(): pair for pair in pairs}
+
+                # Process each address
+                for address in addresses:
+                    key = f"{chain_id}:{address}"
+                    pair = pairs_map.get(address.lower())
+
+                    if pair:
+                        # Add request timing info to the pair object for debugging
+                        pair._request_duration = request_duration
+                        pair._request_time = request_end
+
+                        # Check if we should filter for changes
+                        if self.filter_changes:
+                            # Only emit if data changed
+                            if self._has_changed(key, pair):
+                                self._cache[key] = pair
+                                await self._emit(chain_id, address, pair)
+                                self.polling_stats["cache_misses"] += 1
+                            else:
+                                self.polling_stats["cache_hits"] += 1
+                        else:
+                            # Raw mode: emit every update
                             await self._emit(chain_id, address, pair)
-                    else:
-                        # Raw mode: emit every update
-                        await self._emit(chain_id, address, pair)
 
-        except Exception:
-            logger.exception(
-                "Polling error for chain %s with %d addresses", chain_id, len(addresses) if addresses else 0
-            )
+                # Success - break out of retry loop
+                break
+
+            except Exception as e:
+                retry_manager.record_failure(e)
+
+                # Update error statistics
+                self.polling_stats["total_polls"] += 1
+                self.polling_stats["failed_polls"] += 1
+
+                if retry_manager.should_retry(e):
+                    retry_context = {
+                        "operation": "batch_fetch_retry",
+                        "chain_id": chain_id,
+                        "addresses_count": len(addresses),
+                        "attempt": retry_manager.attempt,
+                        "max_retries": self.retry_config.max_retries + 1,
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "retry_delay": retry_manager.calculate_delay(),
+                    }
+
+                    self.contextual_logger.warning(
+                        "Polling error for chain %s, retrying (attempt %d/%d): %s",
+                        chain_id,
+                        retry_manager.attempt,
+                        self.retry_config.max_retries + 1,
+                        str(e),
+                        context=retry_context,
+                    )
+
+                    logger.warning(
+                        "Polling error for chain %s with %d addresses (attempt %d/%d): %s. Retrying in %.2fs",
+                        chain_id,
+                        len(addresses),
+                        retry_manager.attempt,
+                        self.retry_config.max_retries + 1,
+                        str(e),
+                        retry_manager.calculate_delay(),
+                    )
+                    await retry_manager.wait_async()
+                    continue
+                else:
+                    # Max retries exceeded - log and continue to next poll cycle
+                    final_error_context = {
+                        "operation": "batch_fetch_final_failure",
+                        "chain_id": chain_id,
+                        "addresses_count": len(addresses),
+                        "total_attempts": retry_manager.attempt,
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "will_retry_next_poll": True,
+                    }
+
+                    if isinstance(e, HttpError):
+                        self.contextual_logger.warning(
+                            "HTTP error during batch fetch after %d attempts, will retry on next poll: %s",
+                            retry_manager.attempt,
+                            str(e),
+                            context=final_error_context,
+                        )
+
+                        logger.warning(
+                            "HTTP error during batch fetch for chain %s with %d addresses after %d attempts: %s. Will retry on next poll.",
+                            chain_id,
+                            len(addresses),
+                            retry_manager.attempt,
+                            e,
+                        )
+                    else:
+                        self.contextual_logger.error(
+                            "Polling failed after %d attempts, will retry on next poll: %s",
+                            retry_manager.attempt,
+                            str(e),
+                            context=final_error_context,
+                            exc_info=True,
+                        )
+
+                        logger.exception(
+                            "Polling failed for chain %s with %d addresses after %d attempts: %s. Will retry on next poll.",
+                            chain_id,
+                            len(addresses),
+                            retry_manager.attempt,
+                            type(e).__name__,
+                        )
+                    break
 
     def _has_changed(self, key: str, new_pair: TokenPair) -> bool:
         """Check if pair data has changed"""
@@ -338,8 +502,16 @@ class PollingStream(StreamingClient):
         return key in self.subscriptions
 
     async def close(self):
-        """Alias for disconnect"""
+        """Alias for disconnect with stats logging"""
+        close_context = {
+            "operation": "close_stream",
+            "final_stats": self.get_streaming_stats(),
+        }
+
+        self.contextual_logger.info("Closing polling stream", context=close_context)
         await self.disconnect()
+
+        self.contextual_logger.info("Polling stream closed", context=close_context)
 
     # Token subscription methods
     async def subscribe_token(
@@ -392,7 +564,6 @@ class PollingStream(StreamingClient):
 
     async def _poll_token(self, chain_id: str, token_address: str):
         """Poll all pairs for a specific token"""
-        import time
 
         key = f"{chain_id}:{token_address}"
         next_poll_time = time.time()
@@ -419,44 +590,83 @@ class PollingStream(StreamingClient):
 
     async def _fetch_and_emit_token(self, chain_id: str, token_address: str):
         """Fetch all pairs for a token and emit updates"""
-        import time
 
         key = f"{chain_id}:{token_address}"
         if key not in self._token_subscriptions:
             return
 
-        try:
-            # Log API request time
-            request_start = time.time()
+        retry_manager = RetryManager(self.retry_config)
 
-            # Fetch all pairs for this token
-            pairs = await self.dexscreener_client.get_pairs_by_token_address_async(chain_id, token_address)
+        while True:
+            try:
+                # Log API request time
+                request_start = time.time()
 
-            request_end = time.time()
-            request_duration = request_end - request_start
+                # Fetch all pairs for this token
+                pairs = await self.dexscreener_client.get_pairs_by_token_address_async(chain_id, token_address)
 
-            logger.debug(
-                "Token fetch completed for %s:%s - %d pairs returned in %.2fms",
-                chain_id,
-                token_address,
-                len(pairs),
-                request_duration * 1000,
-            )
+                request_end = time.time()
+                request_duration = request_end - request_start
 
-            # Add timing info for debugging
-            for pair in pairs:
-                pair._request_duration = request_duration
-                pair._request_time = request_end
+                logger.debug(
+                    "Token fetch completed for %s:%s - %d pairs returned in %.2fms",
+                    chain_id,
+                    token_address,
+                    len(pairs),
+                    request_duration * 1000,
+                )
 
-            # Emit to all callbacks
-            for callback in self._token_subscriptions[key].copy():
-                try:
-                    if asyncio.iscoroutinefunction(callback):
-                        await callback(pairs)
+                # Add timing info for debugging
+                for pair in pairs:
+                    pair._request_duration = request_duration
+                    pair._request_time = request_end
+
+                # Emit to all callbacks
+                for callback in self._token_subscriptions[key].copy():
+                    try:
+                        if asyncio.iscoroutinefunction(callback):
+                            await callback(pairs)
+                        else:
+                            callback(pairs)
+                    except Exception as e:
+                        logger.exception(
+                            "Token callback error for %s:%s - %s", chain_id, token_address, type(e).__name__
+                        )
+
+                # Success - break out of retry loop
+                break
+
+            except Exception as e:
+                retry_manager.record_failure(e)
+
+                if retry_manager.should_retry(e):
+                    logger.warning(
+                        "Token polling error for %s:%s (attempt %d/%d): %s. Retrying in %.2fs",
+                        chain_id,
+                        token_address,
+                        retry_manager.attempt,
+                        self.retry_config.max_retries + 1,
+                        str(e),
+                        retry_manager.calculate_delay(),
+                    )
+                    await retry_manager.wait_async()
+                    continue
+                else:
+                    # Max retries exceeded - log and continue to next poll cycle
+                    if isinstance(e, HttpError):
+                        logger.warning(
+                            "HTTP error during token fetch for %s:%s after %d attempts: %s. Will retry on next poll.",
+                            chain_id,
+                            token_address,
+                            retry_manager.attempt,
+                            e,
+                        )
                     else:
-                        callback(pairs)
-                except Exception as e:
-                    logger.exception("Token callback error for %s:%s - %s", chain_id, token_address, type(e).__name__)
-
-        except Exception:
-            logger.exception("Token polling error for %s:%s", chain_id, token_address)
+                        logger.exception(
+                            "Token polling failed for %s:%s after %d attempts: %s. Will retry on next poll.",
+                            chain_id,
+                            token_address,
+                            retry_manager.attempt,
+                            type(e).__name__,
+                        )
+                    break

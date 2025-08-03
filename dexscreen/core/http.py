@@ -4,6 +4,7 @@ Enhanced with realworld browser impersonation and custom configuration support
 
 import asyncio
 import contextlib
+import logging
 from datetime import datetime, timedelta
 from enum import Enum
 from threading import Lock
@@ -14,6 +15,16 @@ from curl_cffi.requests import AsyncSession, Session
 
 from ..utils.browser_selector import get_random_browser
 from ..utils.ratelimit import RateLimiter
+from ..utils.retry import RetryConfig, RetryManager, RetryPresets
+from .exceptions import (
+    HttpConnectionError,
+    HttpRequestError,
+    HttpResponseParsingError,
+    HttpSessionError,
+    HttpTimeoutError,
+)
+
+logger = logging.getLogger(__name__)
 
 # Type alias for HTTP methods
 HttpMethod = Literal["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "TRACE"]
@@ -45,6 +56,7 @@ class HttpClientCffi:
         base_url: str = "https://api.dexscreener.com/",
         client_kwargs: Optional[dict[str, Any]] = None,
         warmup_url: str = "/latest/dex/tokens/solana?limit=1",
+        retry_config: Optional[RetryConfig] = None,
     ):
         """
         Initialize HTTP client with rate limiting and browser impersonation.
@@ -57,17 +69,27 @@ class HttpClientCffi:
                 Common options include:
                 - impersonate: Browser to impersonate (default: "realworld")
                 - proxies: Proxy configuration
-                - timeout: Request timeout
+                - timeout: Request timeout (default: 10 seconds)
                 - headers: Additional headers
                 - verify: SSL verification
             warmup_url: URL path for warming up new sessions
+            retry_config: Retry configuration for network operations.
+                If None, uses default API-optimized retry settings.
         """
         self._limiter = RateLimiter(calls, period)
         self.base_url = base_url
         self.warmup_url = warmup_url
 
+        # Setup retry configuration
+        self.retry_config = retry_config or RetryPresets.api_calls()
+
         # Setup client kwargs with defaults
         self.client_kwargs = client_kwargs or {}
+
+        # Set default timeout if not specified
+        if "timeout" not in self.client_kwargs:
+            self.client_kwargs["timeout"] = 10
+
         # Use our custom realworld browser selection if not specified
         if "impersonate" not in self.client_kwargs:
             self.client_kwargs["impersonate"] = get_random_browser()
@@ -99,6 +121,9 @@ class HttpClientCffi:
             "failed_requests": 0,
             "successful_requests": 0,
             "last_switch": None,
+            "retry_attempts": 0,
+            "retry_successes": 0,
+            "retry_failures": 0,
         }
 
     def _create_absolute_url(self, relative: str) -> str:
@@ -153,7 +178,7 @@ class HttpClientCffi:
 
     def request(self, method: HttpMethod, url: str, **kwargs) -> Union[list, dict, None]:
         """
-        Synchronous request with rate limiting and browser impersonation.
+        Synchronous request with rate limiting, retry logic, and browser impersonation.
 
         Args:
             method: HTTP method (GET, POST, etc.)
@@ -162,30 +187,115 @@ class HttpClientCffi:
 
         Returns:
             Parsed JSON response
+
+        Raises:
+            HttpConnectionError: When unable to establish connection (after retries)
+            HttpTimeoutError: When request times out (after retries)
+            HttpRequestError: When request fails with HTTP error status (after retries)
+            HttpResponseParsingError: When response parsing fails
+            HttpSessionError: When session creation fails
         """
         url = self._create_absolute_url(url)
+        retry_manager = RetryManager(self.retry_config)
 
         with self._limiter:
+            # Try session creation first
             try:
-                # Use persistent session
                 session = self._ensure_sync_session()
-                response = session.request(method, url, **kwargs)  # type: ignore
-                response.raise_for_status()
+            except Exception as e:
+                raise HttpSessionError("Failed to create or access sync session", original_error=e) from e
 
-                # Check if response is JSON
-                content_type = response.headers.get("content-type", "")
-                if "application/json" in content_type:
-                    # Use orjson for better performance
-                    return orjson.loads(response.content)
-                else:
-                    # Non-JSON response (e.g., HTML error page)
-                    return None
-            except Exception:
-                return None
+            while True:
+                try:
+                    response = session.request(method, url, **kwargs)  # type: ignore
+                    response.raise_for_status()
+
+                    # Track success
+                    with self._lock:
+                        self._stats["successful_requests"] += 1
+                        if retry_manager.attempt > 0:
+                            self._stats["retry_successes"] += 1
+
+                    # Check if response is JSON
+                    content_type = response.headers.get("content-type", "")
+                    if "application/json" in content_type:
+                        try:
+                            # Use orjson for better performance
+                            return orjson.loads(response.content)
+                        except Exception as e:
+                            # Get response content as string for error reporting
+                            content_preview = (
+                                response.content[:200].decode("utf-8", errors="replace") if response.content else ""
+                            )
+                            # Parsing errors are not retryable
+                            raise HttpResponseParsingError(
+                                method, url, content_type, content_preview, original_error=e
+                            ) from e
+                    else:
+                        # Non-JSON response (e.g., HTML error page) - this could be an API error
+                        content_preview = (
+                            response.content[:200].decode("utf-8", errors="replace") if response.content else ""
+                        )
+                        # Parsing errors are not retryable
+                        raise HttpResponseParsingError(
+                            method,
+                            url,
+                            content_type,
+                            content_preview,
+                            original_error=Exception(f"Expected JSON response but got {content_type}"),
+                        )
+
+                except HttpResponseParsingError:
+                    # Re-raise parsing errors immediately (not retryable)
+                    raise
+                except Exception as e:
+                    with self._lock:
+                        self._stats["failed_requests"] += 1
+                        if retry_manager.attempt > 0:
+                            self._stats["retry_attempts"] += 1
+
+                    retry_manager.record_failure(e)
+
+                    if retry_manager.should_retry(e):
+                        logger.debug(
+                            "Retrying sync request %s %s (attempt %d/%d): %s",
+                            method,
+                            url,
+                            retry_manager.attempt,
+                            self.retry_config.max_retries + 1,
+                            str(e),
+                        )
+                        retry_manager.wait_sync()
+                        continue
+                    else:
+                        # Not retryable or max retries exceeded - classify and raise final error
+                        with self._lock:
+                            if retry_manager.attempt > 0:
+                                self._stats["retry_failures"] += 1
+
+                        # Classify the error type for final exception
+                        error_msg = str(e).lower()
+                        if "timeout" in error_msg or "timed out" in error_msg:
+                            # Extract timeout value if available from kwargs
+                            timeout = kwargs.get("timeout", "unknown")
+                            raise HttpTimeoutError(method, url, timeout, original_error=e) from e
+                        elif "connection" in error_msg or "resolve" in error_msg or "network" in error_msg:
+                            raise HttpConnectionError(method, url, original_error=e) from e
+                        else:
+                            # Get status code if available
+                            status_code = None
+                            response_text = None
+                            if hasattr(e, "response"):
+                                response = e.response  # type: ignore
+                                if response and hasattr(response, "status_code"):
+                                    status_code = response.status_code
+                                if response and hasattr(response, "content"):
+                                    response_text = response.content[:200].decode("utf-8", errors="replace")
+                            raise HttpRequestError(method, url, status_code, response_text, original_error=e) from e
 
     async def request_async(self, method: HttpMethod, url: str, **kwargs) -> Union[list, dict, None]:
         """
-        Asynchronous request with rate limiting and browser impersonation.
+        Asynchronous request with rate limiting, retry logic, and browser impersonation.
 
         Args:
             method: HTTP method (GET, POST, etc.)
@@ -194,50 +304,147 @@ class HttpClientCffi:
 
         Returns:
             Parsed JSON response
+
+        Raises:
+            HttpConnectionError: When unable to establish connection (after retries)
+            HttpTimeoutError: When request times out (after retries)
+            HttpRequestError: When request fails with HTTP error status (after retries)
+            HttpResponseParsingError: When response parsing fails
+            HttpSessionError: When session creation fails
         """
         url = self._create_absolute_url(url)
+        retry_manager = RetryManager(self.retry_config)
 
         async with self._limiter:
-            # Get active session
-            session = await self._ensure_active_session()
+            while True:
+                # Get active session for each attempt
+                try:
+                    session = await self._ensure_active_session()
+                except Exception as e:
+                    raise HttpSessionError("Failed to create or access async session", original_error=e) from e
 
-            # Track active requests
-            with self._lock:
-                self._primary_requests += 1
-
-            try:
-                response = await session.request(method, url, **kwargs)  # type: ignore
-                response.raise_for_status()
-
-                # Statistics
+                # Track active requests
                 with self._lock:
-                    self._stats["successful_requests"] += 1
+                    self._primary_requests += 1
 
-                # Parse response
-                content_type = response.headers.get("content-type", "")
-                if "application/json" in content_type:
-                    # Use orjson for better performance
-                    return orjson.loads(response.content)
-                else:
-                    return None
+                try:
+                    response = await session.request(method, url, **kwargs)  # type: ignore
+                    response.raise_for_status()
 
-            except Exception:
-                with self._lock:
-                    self._stats["failed_requests"] += 1
+                    # Track success
+                    with self._lock:
+                        self._stats["successful_requests"] += 1
+                        if retry_manager.attempt > 0:
+                            self._stats["retry_successes"] += 1
 
-                # Try failover to secondary session if available
-                if self._secondary_state == SessionState.ACTIVE:
-                    return await self._failover_request(method, url, **kwargs)
+                    # Parse response
+                    content_type = response.headers.get("content-type", "")
+                    if "application/json" in content_type:
+                        try:
+                            # Use orjson for better performance
+                            return orjson.loads(response.content)
+                        except Exception as e:
+                            # Get response content as string for error reporting
+                            content_preview = (
+                                response.content[:200].decode("utf-8", errors="replace") if response.content else ""
+                            )
+                            # Parsing errors are not retryable
+                            raise HttpResponseParsingError(
+                                method, url, content_type, content_preview, original_error=e
+                            ) from e
+                    else:
+                        # Non-JSON response (e.g., HTML error page) - this could be an API error
+                        content_preview = (
+                            response.content[:200].decode("utf-8", errors="replace") if response.content else ""
+                        )
+                        # Parsing errors are not retryable
+                        raise HttpResponseParsingError(
+                            method,
+                            url,
+                            content_type,
+                            content_preview,
+                            original_error=Exception(f"Expected JSON response but got {content_type}"),
+                        )
 
-                return None
+                except HttpResponseParsingError:
+                    # Re-raise parsing errors immediately (not retryable)
+                    with self._lock:
+                        self._stats["failed_requests"] += 1
+                    raise
+                except Exception as e:
+                    with self._lock:
+                        self._stats["failed_requests"] += 1
+                        if retry_manager.attempt > 0:
+                            self._stats["retry_attempts"] += 1
 
-            finally:
-                # Decrease request count
-                with self._lock:
-                    self._primary_requests -= 1
+                    retry_manager.record_failure(e)
+
+                    if retry_manager.should_retry(e):
+                        logger.debug(
+                            "Retrying async request %s %s (attempt %d/%d): %s",
+                            method,
+                            url,
+                            retry_manager.attempt,
+                            self.retry_config.max_retries + 1,
+                            str(e),
+                        )
+
+                        # Decrease request count before waiting
+                        with self._lock:
+                            self._primary_requests -= 1
+
+                        await retry_manager.wait_async()
+                        continue
+                    else:
+                        # Not retryable or max retries exceeded
+                        with self._lock:
+                            if retry_manager.attempt > 0:
+                                self._stats["retry_failures"] += 1
+
+                        # Try failover to secondary session if available (only on final failure)
+                        if self._secondary_state == SessionState.ACTIVE:
+                            try:
+                                # Decrease primary request count before failover
+                                with self._lock:
+                                    self._primary_requests -= 1
+
+                                return await self._failover_request(method, url, **kwargs)
+                            except Exception as failover_error:
+                                # If failover also fails, raise the original error with failover context
+                                raise self._classify_async_error(method, url, e, kwargs) from failover_error
+
+                        # No failover available or didn't work, classify the error
+                        raise self._classify_async_error(method, url, e, kwargs) from e
+
+                finally:
+                    # Decrease request count (only if we're not retrying)
+                    if not (retry_manager.last_exception and retry_manager.should_retry(retry_manager.last_exception)):
+                        with self._lock:
+                            self._primary_requests -= 1
+
+    def _classify_async_error(self, method: str, url: str, error: Exception, kwargs: dict) -> Exception:
+        """Classify an async error into appropriate HTTP exception type"""
+        error_msg = str(error).lower()
+        if "timeout" in error_msg or "timed out" in error_msg:
+            # Extract timeout value if available from kwargs
+            timeout = kwargs.get("timeout", "unknown")
+            return HttpTimeoutError(method, url, timeout, original_error=error)
+        elif "connection" in error_msg or "resolve" in error_msg or "network" in error_msg:
+            return HttpConnectionError(method, url, original_error=error)
+        else:
+            # Get status code if available
+            status_code = None
+            response_text = None
+            if hasattr(error, "response"):
+                response = error.response  # type: ignore
+                if response and hasattr(response, "status_code"):
+                    status_code = response.status_code
+                if response and hasattr(response, "content"):
+                    response_text = response.content[:200].decode("utf-8", errors="replace")
+            return HttpRequestError(method, url, status_code, response_text, original_error=error)
 
     async def _failover_request(self, method: HttpMethod, url: str, **kwargs) -> Union[list, dict, None]:
-        """Failover to secondary session"""
+        """Failover to secondary session - raises exceptions instead of returning None"""
         if self._secondary_session and self._secondary_state == SessionState.ACTIVE:
             try:
                 with self._lock:
@@ -248,16 +455,42 @@ class HttpClientCffi:
 
                 content_type = response.headers.get("content-type", "")
                 if "application/json" in content_type:
-                    # Use orjson for better performance
-                    return orjson.loads(response.content)
+                    try:
+                        # Use orjson for better performance
+                        return orjson.loads(response.content)
+                    except Exception as e:
+                        # Get response content as string for error reporting
+                        content_preview = (
+                            response.content[:200].decode("utf-8", errors="replace") if response.content else ""
+                        )
+                        raise HttpResponseParsingError(
+                            method, url, content_type, content_preview, original_error=e
+                        ) from e
                 else:
-                    return None
+                    # Non-JSON response (e.g., HTML error page) - this could be an API error
+                    content_preview = (
+                        response.content[:200].decode("utf-8", errors="replace") if response.content else ""
+                    )
+                    raise HttpResponseParsingError(
+                        method,
+                        url,
+                        content_type,
+                        content_preview,
+                        original_error=Exception(f"Expected JSON response but got {content_type}"),
+                    )
 
+            except HttpResponseParsingError:
+                # Re-raise our custom parsing errors as-is
+                raise
+            except Exception as e:
+                # Classify and raise the failover error
+                raise self._classify_async_error(method, url, e, kwargs) from e
             finally:
                 with self._lock:
                     self._secondary_requests -= 1
 
-        return None
+        # No secondary session available
+        raise HttpSessionError("No secondary session available for failover")
 
     async def _perform_switch(self):
         """Perform hot switch between sessions"""
@@ -437,6 +670,26 @@ class HttpClientCffi:
         """
         with self._lock:
             return self._stats.copy()
+
+    def update_retry_config(self, retry_config: RetryConfig):
+        """
+        Update retry configuration at runtime.
+
+        Args:
+            retry_config: New retry configuration
+        """
+        with self._lock:
+            self.retry_config = retry_config
+
+    def get_retry_config(self) -> RetryConfig:
+        """
+        Get current retry configuration.
+
+        Returns:
+            Current retry configuration
+        """
+        with self._lock:
+            return self.retry_config
 
     async def close(self):
         """

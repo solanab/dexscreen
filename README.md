@@ -40,7 +40,11 @@ pip install dexscreen
 ```python
 from dexscreen import DexscreenerClient
 
+# Default client with 10-second timeout
 client = DexscreenerClient()
+
+# Custom timeout client
+client = DexscreenerClient(client_kwargs={"timeout": 30})
 
 # Get a specific pair by token address
 pairs = client.get_pairs_by_token_address("solana", "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN")
@@ -231,6 +235,47 @@ The SDK automatically handles rate limiting:
 - 60 requests/minute for token profile endpoints
 - 300 requests/minute for pair data endpoints
 
+## Timeout Configuration
+
+The SDK provides flexible timeout configuration for different use cases:
+
+### Default Timeout
+```python
+# Default timeout is 10 seconds
+client = DexscreenerClient()
+```
+
+### Custom Timeout
+```python
+# Set custom timeout during initialization
+client = DexscreenerClient(client_kwargs={"timeout": 30})
+
+# Different timeouts for different scenarios
+fast_client = DexscreenerClient(client_kwargs={"timeout": 5})    # Quick responses
+stable_client = DexscreenerClient(client_kwargs={"timeout": 60}) # Stable connections
+```
+
+### Runtime Timeout Updates
+```python
+# Update timeout at runtime
+await client._client_300rpm.update_config({"timeout": 15})
+
+# Multiple config updates including timeout
+await client._client_300rpm.update_config({
+    "timeout": 25,
+    "impersonate": "chrome136"
+})
+```
+
+### Recommended Timeout Values
+
+| Use Case | Timeout (seconds) | Description |
+|----------|------------------|-------------|
+| Quick Trading | 5-10 | Fast response for time-sensitive operations |
+| General Use | 10-15 | Default balanced setting |
+| Stable Monitoring | 20-30 | Reliable for long-running subscriptions |
+| Poor Networks | 30-60 | Handle unstable connections |
+
 ## Browser Impersonation
 
 The SDK uses curl_cffi for browser impersonation to bypass anti-bot protection:
@@ -239,6 +284,12 @@ The SDK uses curl_cffi for browser impersonation to bypass anti-bot protection:
 # Use different browser versions
 client = DexscreenerClient(impersonate="chrome134")
 client = DexscreenerClient(impersonate="safari180")
+
+# Combine browser impersonation with custom timeout
+client = DexscreenerClient(
+    impersonate="chrome136", 
+    client_kwargs={"timeout": 20}
+)
 ```
 
 ## Contributing

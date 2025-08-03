@@ -2,7 +2,6 @@
 Unit tests for batch query limits in DexscreenerClient
 """
 
-import asyncio
 from unittest.mock import patch
 
 import pytest
@@ -13,7 +12,7 @@ from dexscreen.api.client import DexscreenerClient
 class TestBatchLimits:
     """Test batch query limits for DexscreenerClient"""
 
-    def test_get_pairs_by_pairs_addresses_single_batch(self, create_test_token_pair):
+    def test_get_pairs_by_pairs_addresses_single_batch(self, create_test_token_pair, batch_test_addresses_by_chain):
         """Test get_pairs_by_pairs_addresses with <= 30 addresses"""
         client = DexscreenerClient()
 
@@ -26,7 +25,8 @@ class TestBatchLimits:
         }
 
         with patch.object(client._client_300rpm, "request", return_value=mock_response) as mock_request:
-            addresses = [f"address{i}" for i in range(10)]
+            # Use proper test addresses from fixture
+            addresses = batch_test_addresses_by_chain["solana"][:10]
             result = client.get_pairs_by_pairs_addresses("solana", addresses)
 
             # Should make only one request
@@ -36,48 +36,58 @@ class TestBatchLimits:
             # Check the URL contains all addresses
             call_args = mock_request.call_args[0]
             assert "latest/dex/pairs/solana/" in call_args[1]
-            assert all(f"address{i}" in call_args[1] for i in range(10))
+            # Check that the addresses from the fixture are in the URL
+            for addr in addresses:
+                assert addr in call_args[1]
 
-    def test_get_pairs_by_pairs_addresses_exceeds_limit(self, batch_test_addresses):
+    def test_get_pairs_by_pairs_addresses_exceeds_limit(self, batch_test_addresses_by_chain):
         """Test get_pairs_by_pairs_addresses with > 30 addresses raises ValueError"""
         client = DexscreenerClient()
 
         # Use more than 30 addresses from fixture
-        addresses = batch_test_addresses["ethereum"][:40]  # 40 addresses
+        addresses = batch_test_addresses_by_chain["ethereum"][:40]  # 40 addresses
 
-        # Should raise ValueError
-        with pytest.raises(ValueError) as exc_info:
+        # Should raise TooManyItemsError (more specific than ValueError)
+        from dexscreen.core.exceptions import TooManyItemsError
+
+        with pytest.raises(TooManyItemsError) as exc_info:
             client.get_pairs_by_pairs_addresses("solana", addresses)
 
-        assert "Maximum 30 pair addresses allowed, got 40" in str(exc_info.value)
+        assert "Too many pair_addresses: 40. Maximum allowed: 30" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_get_pairs_by_pairs_addresses_async_exceeds_limit(self):
-        """Test async version raises ValueError with > 30 addresses"""
+    async def test_get_pairs_by_pairs_addresses_async_exceeds_limit(self, batch_test_addresses_by_chain):
+        """Test async version raises TooManyItemsError with > 30 addresses"""
         client = DexscreenerClient()
 
-        addresses = [f"address{i}" for i in range(35)]  # 35 addresses
+        addresses = batch_test_addresses_by_chain["ethereum"][:35]  # 35 addresses
 
-        # Should raise ValueError
-        with pytest.raises(ValueError) as exc_info:
+        # Should raise TooManyItemsError
+        from dexscreen.core.exceptions import TooManyItemsError
+
+        with pytest.raises(TooManyItemsError) as exc_info:
             await client.get_pairs_by_pairs_addresses_async("solana", addresses)
 
-        assert "Maximum 30 pair addresses allowed, got 35" in str(exc_info.value)
+        assert "Too many pair_addresses: 35. Maximum allowed: 30" in str(exc_info.value)
 
-    def test_get_pairs_by_token_addresses_exceeds_limit(self):
-        """Test get_pairs_by_token_addresses with > 30 tokens raises ValueError"""
+    def test_get_pairs_by_token_addresses_exceeds_limit(self, batch_test_addresses_by_chain):
+        """Test get_pairs_by_token_addresses with > 30 tokens raises TooManyItemsError"""
         client = DexscreenerClient()
 
-        # Send 100 token addresses
-        addresses = [f"token{i}" for i in range(100)]
+        # Send 100 token addresses - use valid Solana addresses from fixture
+        addresses = batch_test_addresses_by_chain["solana"][:100]
 
-        # Should raise ValueError
-        with pytest.raises(ValueError) as exc_info:
+        # Should raise TooManyItemsError
+        from dexscreen.core.exceptions import TooManyItemsError
+
+        with pytest.raises(TooManyItemsError) as exc_info:
             client.get_pairs_by_token_addresses("solana", addresses)
 
-        assert "Maximum 30 token addresses allowed, got 100" in str(exc_info.value)
+        assert "Too many token_addresses: 100. Maximum allowed: 30" in str(exc_info.value)
 
-    def test_get_pairs_by_token_addresses_within_limit(self):
+    def test_get_pairs_by_token_addresses_within_limit(
+        self, transaction_stats_data, volume_data, price_change_data, batch_test_addresses_by_chain
+    ):
         """Test get_pairs_by_token_addresses with <= 30 tokens works"""
         client = DexscreenerClient()
 
@@ -92,21 +102,16 @@ class TestBatchLimits:
                 "quoteToken": {"address": "0xquote", "name": "Solana", "symbol": "SOL"},
                 "priceNative": "1.0",
                 "priceUsd": "100.0",
-                "txns": {
-                    "m5": {"buys": 10, "sells": 5},
-                    "h1": {"buys": 100, "sells": 50},
-                    "h6": {"buys": 600, "sells": 300},
-                    "h24": {"buys": 2400, "sells": 1200},
-                },
-                "volume": {"m5": 1000.0, "h1": 5000.0, "h6": 30000.0, "h24": 120000.0},
-                "priceChange": {"m5": 0.5, "h1": -0.2, "h6": 1.5, "h24": -2.3},
+                "txns": transaction_stats_data,
+                "volume": volume_data,
+                "priceChange": price_change_data,
             }
             for i in range(25)  # Less than 30 pairs
         ]
 
         with patch.object(client._client_300rpm, "request", return_value=mock_response) as mock_request:
-            # Send 25 token addresses
-            addresses = [f"token{i}" for i in range(25)]
+            # Send 25 token addresses - use valid Solana addresses from fixture
+            addresses = batch_test_addresses_by_chain["solana"][:25]
             result = client.get_pairs_by_token_addresses("solana", addresses)
 
             # Should make only ONE request
@@ -116,7 +121,7 @@ class TestBatchLimits:
             # Verify all 25 addresses were sent
             call_args = mock_request.call_args[0]
             assert "tokens/v1/solana/" in call_args[1]
-            assert all(f"token{i}" in call_args[1] for i in range(25))
+            assert all(addr in call_args[1] for addr in addresses)
 
     def test_get_pairs_by_pairs_addresses_empty_list(self):
         """Test get_pairs_by_pairs_addresses with empty address list"""
@@ -125,7 +130,9 @@ class TestBatchLimits:
         result = client.get_pairs_by_pairs_addresses("solana", [])
         assert result == []
 
-    def test_get_pairs_by_pairs_addresses_exactly_30(self):
+    def test_get_pairs_by_pairs_addresses_exactly_30(
+        self, batch_test_addresses_by_chain, transaction_stats_data, volume_data, price_change_data
+    ):
         """Test get_pairs_by_pairs_addresses with exactly 30 addresses"""
         client = DexscreenerClient()
 
@@ -140,21 +147,17 @@ class TestBatchLimits:
                     "quoteToken": {"address": "0xquote", "name": "Solana", "symbol": "SOL"},
                     "priceNative": "1.0",
                     "priceUsd": "100.0",
-                    "txns": {
-                        "m5": {"buys": 10, "sells": 5},
-                        "h1": {"buys": 100, "sells": 50},
-                        "h6": {"buys": 600, "sells": 300},
-                        "h24": {"buys": 2400, "sells": 1200},
-                    },
-                    "volume": {"m5": 1000.0, "h1": 5000.0, "h6": 30000.0, "h24": 120000.0},
-                    "priceChange": {"m5": 0.5, "h1": -0.2, "h6": 1.5, "h24": -2.3},
+                    "txns": transaction_stats_data,
+                    "volume": volume_data,
+                    "priceChange": price_change_data,
                 }
                 for i in range(30)
             ]
         }
 
         with patch.object(client._client_300rpm, "request", return_value=mock_response) as mock_request:
-            addresses = [f"address{i}" for i in range(30)]
+            # Use valid addresses from fixture
+            addresses = batch_test_addresses_by_chain["solana"][:30]
             result = client.get_pairs_by_pairs_addresses("solana", addresses)
 
             # Should make only one request
@@ -163,14 +166,25 @@ class TestBatchLimits:
 
 
 if __name__ == "__main__":
-    # Run sync tests - Note: These would need proper fixture setup in real execution
-    test = TestBatchLimits()
-    # test.test_get_pairs_by_pairs_addresses_single_batch()  # Requires create_test_token_pair fixture
-    # test.test_get_pairs_by_pairs_addresses_exceeds_limit()  # Requires batch_test_addresses fixture
-    test.test_get_pairs_by_token_addresses_exceeds_limit()
-    test.test_get_pairs_by_token_addresses_within_limit()
-    test.test_get_pairs_by_pairs_addresses_empty_list()
-    test.test_get_pairs_by_pairs_addresses_exactly_30()
+    # Run all tests using pytest
+    # This ensures proper fixture injection and test discovery
+    import sys
 
-    # Run async test
-    asyncio.run(test.test_get_pairs_by_pairs_addresses_async_exceeds_limit())
+    # Run specific test methods if needed
+    test_methods = [
+        "test_batch_limits.py::TestBatchLimits::test_get_pairs_by_pairs_addresses_single_batch",
+        "test_batch_limits.py::TestBatchLimits::test_get_pairs_by_pairs_addresses_exceeds_limit",
+        "test_batch_limits.py::TestBatchLimits::test_get_pairs_by_pairs_addresses_async_exceeds_limit",
+        "test_batch_limits.py::TestBatchLimits::test_get_pairs_by_token_addresses_exceeds_limit",
+        "test_batch_limits.py::TestBatchLimits::test_get_pairs_by_token_addresses_within_limit",
+        "test_batch_limits.py::TestBatchLimits::test_get_pairs_by_pairs_addresses_empty_list",
+        "test_batch_limits.py::TestBatchLimits::test_get_pairs_by_pairs_addresses_exactly_30",
+    ]
+
+    # Run all tests in this file with pytest
+    exit_code = pytest.main([__file__, "-v", "-s"])
+
+    # Alternative: Run specific tests
+    # exit_code = pytest.main([__file__ + "::" + method for method in test_methods] + ["-v", "-s"])
+
+    sys.exit(exit_code)

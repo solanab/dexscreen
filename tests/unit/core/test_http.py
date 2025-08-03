@@ -7,6 +7,12 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from dexscreen.core.exceptions import (
+    HttpConnectionError,
+    HttpResponseParsingError,
+    HttpSessionError,
+    HttpTimeoutError,
+)
 from dexscreen.core.http import HttpClientCffi
 
 
@@ -27,7 +33,9 @@ class TestHttpClientCffi:
         client = HttpClientCffi(calls=100, period=60, base_url="https://custom.api.com", client_kwargs=custom_kwargs)
 
         assert client.base_url == "https://custom.api.com"
-        assert "timeout" in custom_kwargs  # Don't check exact equality as impersonate might be changed
+        assert client.client_kwargs["timeout"] == 30
+        assert client.client_kwargs["impersonate"] == "chrome120"
+        assert client.client_kwargs["verify"] is False
 
     @patch("dexscreen.utils.browser_selector.get_random_browser", return_value="chrome")
     @patch("dexscreen.core.http.Session")
@@ -115,7 +123,7 @@ class TestHttpClientCffi:
 
         # Create client and send asynchronous request
         client = HttpClientCffi(calls=60, period=60)
-        result = await client.request_async("GET", "dex/pairs/ethereum/0x456")
+        result = await client.request_async("GET", "dex/pairs/ethereum/0x4567890123456789012345678901234567890123")
 
         # Verify call
         assert result == {"pair": {"priceUsd": "200.0"}}
@@ -124,7 +132,7 @@ class TestHttpClientCffi:
     @pytest.mark.asyncio
     @patch("dexscreen.core.http.AsyncSession")
     async def test_async_request_error_handling(self, mock_async_session_class):
-        """Test asynchronous request error handling"""
+        """Test asynchronous request error handling - now raises exceptions"""
         mock_session = AsyncMock()
         mock_session.request.side_effect = Exception("Network error")
         mock_async_session_class.return_value = mock_session
@@ -135,9 +143,13 @@ class TestHttpClientCffi:
 
         client = HttpClientCffi(calls=60, period=60)
 
-        # Now returns None instead of raising
-        result = await client.request_async("GET", "test")
-        assert result is None
+        # Now raises HttpConnectionError instead of returning None (since "Network error" matches connection pattern)
+        with pytest.raises(HttpConnectionError) as exc_info:
+            await client.request_async("GET", "test")
+
+        assert "Network error" in str(exc_info.value)
+        assert exc_info.value.method == "GET"
+        assert "test" in exc_info.value.url
 
     @pytest.mark.asyncio
     async def test_async_request_concurrent(self):
@@ -204,3 +216,343 @@ class TestHttpClientCffi:
         client.request("GET", "test")
 
         # Session is created with client_kwargs which includes headers
+
+    @pytest.mark.asyncio
+    @patch("dexscreen.core.http.AsyncSession")
+    async def test_http_timeout_error(self, mock_async_session_class):
+        """Test HTTP timeout error handling"""
+        mock_session = AsyncMock()
+        mock_session.request.side_effect = Exception("Request timed out")
+        mock_async_session_class.return_value = mock_session
+        # Mock warmup response
+        mock_warmup_response = AsyncMock()
+        mock_warmup_response.status_code = 200
+        mock_session.get.return_value = mock_warmup_response
+
+        client = HttpClientCffi(calls=60, period=60)
+
+        with pytest.raises(HttpTimeoutError) as exc_info:
+            await client.request_async("GET", "test", timeout=30)
+
+        assert exc_info.value.method == "GET"
+        assert exc_info.value.timeout == 30
+        assert "timed out" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    @patch("dexscreen.core.http.AsyncSession")
+    async def test_http_connection_error(self, mock_async_session_class):
+        """Test HTTP connection error handling"""
+        mock_session = AsyncMock()
+        mock_session.request.side_effect = Exception("Connection failed")
+        mock_async_session_class.return_value = mock_session
+        # Mock warmup response
+        mock_warmup_response = AsyncMock()
+        mock_warmup_response.status_code = 200
+        mock_session.get.return_value = mock_warmup_response
+
+        client = HttpClientCffi(calls=60, period=60)
+
+        with pytest.raises(HttpConnectionError) as exc_info:
+            await client.request_async("GET", "test")
+
+        assert exc_info.value.method == "GET"
+        assert "Connection failed" in str(exc_info.value)
+
+    def test_multiple_timeouts_configuration(self):
+        """Test different timeout configurations work correctly"""
+        # Test with various timeout values
+        timeout_values = [5, 10, 15, 30, 60]
+
+        for timeout_val in timeout_values:
+            client = HttpClientCffi(calls=60, period=60, client_kwargs={"timeout": timeout_val})
+            assert client.client_kwargs["timeout"] == timeout_val
+
+    def test_timeout_configuration_merge(self):
+        """Test that timeout configuration merges correctly with other client_kwargs"""
+        client_kwargs = {"timeout": 25, "impersonate": "chrome136", "verify": False, "headers": {"User-Agent": "test"}}
+
+        client = HttpClientCffi(calls=60, period=60, client_kwargs=client_kwargs)
+
+        # Verify all kwargs are preserved including timeout
+        assert client.client_kwargs["timeout"] == 25
+        assert client.client_kwargs["impersonate"] == "chrome136"
+        assert client.client_kwargs["verify"] is False
+        assert "User-Agent" in client.client_kwargs["headers"]
+
+    @pytest.mark.asyncio
+    @patch("dexscreen.core.http.AsyncSession")
+    async def test_http_response_parsing_error(self, mock_async_session_class):
+        """Test HTTP response parsing error handling"""
+        mock_session = AsyncMock()
+        mock_response = AsyncMock()
+        mock_response.raise_for_status = Mock()
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.content = b'{"invalid": json}'  # Invalid JSON
+        mock_session.request.return_value = mock_response
+        mock_async_session_class.return_value = mock_session
+        # Mock warmup response
+        mock_warmup_response = AsyncMock()
+        mock_warmup_response.status_code = 200
+        mock_session.get.return_value = mock_warmup_response
+
+        client = HttpClientCffi(calls=60, period=60)
+
+        with pytest.raises(HttpResponseParsingError) as exc_info:
+            await client.request_async("GET", "test")
+
+        assert exc_info.value.method == "GET"
+        assert exc_info.value.content_type == "application/json"
+
+    @pytest.mark.asyncio
+    @patch("dexscreen.core.http.AsyncSession")
+    async def test_non_json_response_error(self, mock_async_session_class):
+        """Test non-JSON response handling"""
+        mock_session = AsyncMock()
+        mock_response = AsyncMock()
+        mock_response.raise_for_status = Mock()
+        mock_response.headers = {"content-type": "text/html"}
+        mock_response.content = b"<html>Error page</html>"
+        mock_session.request.return_value = mock_response
+        mock_async_session_class.return_value = mock_session
+        # Mock warmup response
+        mock_warmup_response = AsyncMock()
+        mock_warmup_response.status_code = 200
+        mock_session.get.return_value = mock_warmup_response
+
+        client = HttpClientCffi(calls=60, period=60)
+
+        with pytest.raises(HttpResponseParsingError) as exc_info:
+            await client.request_async("GET", "test")
+
+        assert exc_info.value.method == "GET"
+        assert exc_info.value.content_type == "text/html"
+        assert "Expected JSON response" in str(exc_info.value)
+
+    @patch("dexscreen.core.http.Session")
+    def test_sync_request_error_handling(self, mock_session_class):
+        """Test synchronous request error handling"""
+        mock_session = Mock()
+        mock_session.request.side_effect = Exception("Network error")
+        mock_session_class.return_value = mock_session
+
+        client = HttpClientCffi(calls=60, period=60)
+
+        with pytest.raises(HttpConnectionError) as exc_info:
+            client.request("GET", "test")
+
+        assert "Network error" in str(exc_info.value)
+        assert exc_info.value.method == "GET"
+
+    @patch("dexscreen.core.http.Session")
+    def test_sync_timeout_error(self, mock_session_class):
+        """Test synchronous timeout error handling"""
+        mock_session = Mock()
+        mock_session.request.side_effect = Exception("Request timeout")
+        mock_session_class.return_value = mock_session
+
+        client = HttpClientCffi(calls=60, period=60)
+
+        with pytest.raises(HttpTimeoutError) as exc_info:
+            client.request("GET", "test", timeout=15)
+
+        assert exc_info.value.method == "GET"
+        assert exc_info.value.timeout == 15
+
+    def test_default_timeout_is_10_seconds(self):
+        """Test that default timeout is 10 seconds when not specified"""
+        client = HttpClientCffi(calls=60, period=60)
+
+        # Check that default timeout is set in client_kwargs
+        assert "timeout" in client.client_kwargs
+        assert client.client_kwargs["timeout"] == 10
+
+    def test_user_timeout_overrides_default(self):
+        """Test that user-provided timeout overrides default"""
+        custom_timeout = 25
+        client = HttpClientCffi(calls=60, period=60, client_kwargs={"timeout": custom_timeout})
+
+        # Check that user timeout overrides default
+        assert client.client_kwargs["timeout"] == custom_timeout
+
+    @patch("dexscreen.core.http.Session")
+    def test_default_timeout_propagates_to_session(self, mock_session_class):
+        """Test that default timeout is passed to curl_cffi Session"""
+        mock_session = Mock()
+        mock_response = Mock()
+        mock_response.content = b'{"test": "data"}'
+        mock_response.raise_for_status = Mock()
+        mock_response.headers = {"content-type": "application/json"}
+        mock_session.request.return_value = mock_response
+        mock_session_class.return_value = mock_session
+
+        client = HttpClientCffi(calls=60, period=60)
+        client.request("GET", "test")
+
+        # Verify Session was created with default timeout
+        mock_session_class.assert_called_once()
+        call_kwargs = mock_session_class.call_args[1]
+        assert "timeout" in call_kwargs
+        assert call_kwargs["timeout"] == 10
+
+    @patch("dexscreen.core.http.Session")
+    def test_custom_timeout_propagates_to_session(self, mock_session_class):
+        """Test that custom timeout is passed to curl_cffi Session"""
+        mock_session = Mock()
+        mock_response = Mock()
+        mock_response.content = b'{"test": "data"}'
+        mock_response.raise_for_status = Mock()
+        mock_response.headers = {"content-type": "application/json"}
+        mock_session.request.return_value = mock_response
+        mock_session_class.return_value = mock_session
+
+        custom_timeout = 30
+        client = HttpClientCffi(calls=60, period=60, client_kwargs={"timeout": custom_timeout})
+        client.request("GET", "test")
+
+        # Verify Session was created with custom timeout
+        mock_session_class.assert_called_once()
+        call_kwargs = mock_session_class.call_args[1]
+        assert "timeout" in call_kwargs
+        assert call_kwargs["timeout"] == custom_timeout
+
+    @pytest.mark.asyncio
+    @patch("dexscreen.core.http.AsyncSession")
+    async def test_default_timeout_propagates_to_async_session(self, mock_async_session_class):
+        """Test that default timeout is passed to curl_cffi AsyncSession"""
+        mock_session = AsyncMock()
+        mock_response = AsyncMock()
+        mock_response.content = b'{"test": "data"}'
+        mock_response.raise_for_status = Mock()
+        mock_response.headers = {"content-type": "application/json"}
+        mock_session.request.return_value = mock_response
+        mock_async_session_class.return_value = mock_session
+
+        # Mock warmup response
+        mock_warmup_response = AsyncMock()
+        mock_warmup_response.raise_for_status = AsyncMock()
+        mock_warmup_response.status_code = 200
+        mock_session.get.return_value = mock_warmup_response
+
+        client = HttpClientCffi(calls=60, period=60)
+        await client.request_async("GET", "test")
+
+        # Verify AsyncSession was created with default timeout
+        mock_async_session_class.assert_called_once()
+        call_kwargs = mock_async_session_class.call_args[1]
+        assert "timeout" in call_kwargs
+        assert call_kwargs["timeout"] == 10
+
+    @pytest.mark.asyncio
+    @patch("dexscreen.core.http.AsyncSession")
+    async def test_custom_timeout_propagates_to_async_session(self, mock_async_session_class):
+        """Test that custom timeout is passed to curl_cffi AsyncSession"""
+        mock_session = AsyncMock()
+        mock_response = AsyncMock()
+        mock_response.content = b'{"test": "data"}'
+        mock_response.raise_for_status = Mock()
+        mock_response.headers = {"content-type": "application/json"}
+        mock_session.request.return_value = mock_response
+        mock_async_session_class.return_value = mock_session
+
+        # Mock warmup response
+        mock_warmup_response = AsyncMock()
+        mock_warmup_response.raise_for_status = AsyncMock()
+        mock_warmup_response.status_code = 200
+        mock_session.get.return_value = mock_warmup_response
+
+        custom_timeout = 45
+        client = HttpClientCffi(calls=60, period=60, client_kwargs={"timeout": custom_timeout})
+        await client.request_async("GET", "test")
+
+        # Verify AsyncSession was created with custom timeout
+        mock_async_session_class.assert_called_once()
+        call_kwargs = mock_async_session_class.call_args[1]
+        assert "timeout" in call_kwargs
+        assert call_kwargs["timeout"] == custom_timeout
+
+    @patch("dexscreen.core.http.Session")
+    def test_timeout_value_in_request_kwargs(self, mock_session_class):
+        """Test that timeout value is correctly passed in request call"""
+        mock_session = Mock()
+        mock_response = Mock()
+        mock_response.content = b'{"test": "data"}'
+        mock_response.raise_for_status = Mock()
+        mock_response.headers = {"content-type": "application/json"}
+        mock_session.request.return_value = mock_response
+        mock_session_class.return_value = mock_session
+
+        client = HttpClientCffi(calls=60, period=60)
+        specific_timeout = 20
+        client.request("GET", "test", timeout=specific_timeout)
+
+        # Verify request was called with timeout
+        mock_session.request.assert_called_once()
+        call_kwargs = mock_session.request.call_args[1]
+        assert "timeout" in call_kwargs
+        assert call_kwargs["timeout"] == specific_timeout
+
+    @pytest.mark.asyncio
+    @patch("dexscreen.core.http.AsyncSession")
+    async def test_timeout_value_in_async_request_kwargs(self, mock_async_session_class):
+        """Test that timeout value is correctly passed in async request call"""
+        mock_session = AsyncMock()
+        mock_response = AsyncMock()
+        mock_response.content = b'{"test": "data"}'
+        mock_response.raise_for_status = Mock()
+        mock_response.headers = {"content-type": "application/json"}
+        mock_session.request.return_value = mock_response
+        mock_async_session_class.return_value = mock_session
+
+        # Mock warmup response
+        mock_warmup_response = AsyncMock()
+        mock_warmup_response.raise_for_status = AsyncMock()
+        mock_warmup_response.status_code = 200
+        mock_session.get.return_value = mock_warmup_response
+
+        client = HttpClientCffi(calls=60, period=60)
+        specific_timeout = 35
+        await client.request_async("GET", "test", timeout=specific_timeout)
+
+        # Verify request was called with timeout
+        mock_session.request.assert_called_once()
+        call_kwargs = mock_session.request.call_args[1]
+        assert "timeout" in call_kwargs
+        assert call_kwargs["timeout"] == specific_timeout
+
+    @pytest.mark.asyncio
+    @patch("dexscreen.core.http.AsyncSession")
+    async def test_session_creation_error(self, mock_async_session_class):
+        """Test session creation error handling"""
+        # Mock the _ensure_active_session to raise an error
+        client = HttpClientCffi(calls=60, period=60)
+
+        # Directly patch the _ensure_active_session method
+        with patch.object(client, "_ensure_active_session", side_effect=Exception("Session creation failed")):
+            with pytest.raises(HttpSessionError) as exc_info:
+                await client.request_async("GET", "test")
+
+            assert "Session creation failed" in str(exc_info.value)
+
+    def test_timeout_with_no_client_kwargs(self):
+        """Test that default timeout is applied when no client_kwargs provided"""
+        client = HttpClientCffi(calls=60, period=60)
+
+        # Default timeout should be set
+        assert "timeout" in client.client_kwargs
+        assert client.client_kwargs["timeout"] == 10
+
+    def test_timeout_with_empty_client_kwargs(self):
+        """Test that default timeout is applied when empty client_kwargs provided"""
+        client = HttpClientCffi(calls=60, period=60, client_kwargs={})
+
+        # Default timeout should be set
+        assert "timeout" in client.client_kwargs
+        assert client.client_kwargs["timeout"] == 10
+
+    def test_timeout_preserves_other_defaults(self):
+        """Test that setting timeout doesn't interfere with other defaults"""
+        client = HttpClientCffi(calls=60, period=60, client_kwargs={"timeout": 20})
+
+        # Should have timeout and impersonate (default)
+        assert client.client_kwargs["timeout"] == 20
+        assert "impersonate" in client.client_kwargs  # Browser impersonation should still be set

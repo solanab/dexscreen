@@ -24,6 +24,7 @@ ignore: |
   .pyright/
   .git/
   pnpm-lock.yaml
+  node_modules
 
 # 允许 Python 标签
 allowed-tags:

@@ -1,6 +1,5 @@
 {
   "name": "dexscreen",
-  "version": "0.0.1",
   "description": "Prettier configuration for dexscreen markdown files",
   "private": true,
   "devDependencies": {

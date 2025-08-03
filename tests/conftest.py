@@ -256,26 +256,37 @@ def mock_api_response_factory(transaction_stats_data, volume_data, price_change_
     Usage:
     1. Default response: response = factory()
     2. Custom response: response = factory([{...custom pair data...}])
+    3. Parameterized response: response = factory(num_pairs=2, chain_id="solana", base_address="0x1230000000000000000000000000000000000000", quote_address="0x4567890123456789012345678901234567890123")
     """
 
-    def _create_response(pairs_data=None):
-        if pairs_data is None:
-            pairs_data = [
-                {
-                    "chainId": "ethereum",
-                    "dexId": "uniswap",
-                    "url": "https://test.com",
-                    "pairAddress": "0x123",
-                    "baseToken": {"address": "0xabc", "name": "Token A", "symbol": "TKA"},
-                    "quoteToken": {"address": "0xdef", "name": "Token B", "symbol": "TKB"},
-                    "priceNative": "1.0",
-                    "priceUsd": "100.0",
-                    "txns": transaction_stats_data,
-                    "volume": volume_data,
-                    "priceChange": price_change_data,
-                }
-            ]
-        return {"pairs": pairs_data}
+    def _create_response(pairs_data=None, num_pairs=1, chain_id="ethereum", base_address=None, quote_address=None):
+        if pairs_data is not None:
+            # Use provided pairs_data (backward compatibility)
+            return {"pairs": pairs_data}
+
+        # Generate pairs based on parameters
+        generated_pairs = []
+        for i in range(num_pairs):
+            base_addr = base_address or f"0x{(i + 1) * 111:040x}"
+            quote_addr = quote_address or f"0x{(i + 1) * 222:040x}"
+            pair_addr = f"0x{(i + 1) * 333:040x}"
+
+            pair_data = {
+                "chainId": chain_id,
+                "dexId": "uniswap" if chain_id == "ethereum" else "raydium" if chain_id == "solana" else "pancakeswap",
+                "url": f"https://test.com/{pair_addr}",
+                "pairAddress": pair_addr,
+                "baseToken": {"address": base_addr, "name": f"Token A{i + 1}", "symbol": f"TKA{i + 1}"},
+                "quoteToken": {"address": quote_addr, "name": f"Token B{i + 1}", "symbol": f"TKB{i + 1}"},
+                "priceNative": "1.0",
+                "priceUsd": "100.0",
+                "txns": transaction_stats_data,
+                "volume": volume_data,
+                "priceChange": price_change_data,
+            }
+            generated_pairs.append(pair_data)
+
+        return {"pairs": generated_pairs}
 
     return _create_response
 
@@ -390,9 +401,9 @@ def simple_test_pair_data(transaction_stats_data, volume_data, price_change_data
         "chainId": "ethereum",
         "dexId": "uniswap",
         "url": "https://test.com",
-        "pairAddress": "0x123",
-        "baseToken": {"address": "0xabc", "name": "Token A", "symbol": "TKA"},
-        "quoteToken": {"address": "0xdef", "name": "Token B", "symbol": "TKB"},
+        "pairAddress": "0x1230000000000000000000000000000000000000",
+        "baseToken": {"address": "0xabc0000000000000000000000000000000000000", "name": "Token A", "symbol": "TKA"},
+        "quoteToken": {"address": "0xdef0000000000000000000000000000000000000", "name": "Token B", "symbol": "TKB"},
         "priceNative": "1.0",
         "priceUsd": "100.0",
         "txns": transaction_stats_data,
@@ -420,9 +431,13 @@ def create_test_token_pair():
         )
 
         # Create proper model objects
-        base_token = BaseToken(address="0x1", name=base_symbol, symbol=base_symbol)
+        base_token = BaseToken(
+            address="0x1000000000000000000000000000000000000000", name=base_symbol, symbol=base_symbol
+        )
 
-        quote_token = BaseToken(address="0x2", name=quote_symbol, symbol=quote_symbol)
+        quote_token = BaseToken(
+            address="0x2000000000000000000000000000000000000000", name=quote_symbol, symbol=quote_symbol
+        )
 
         transaction_count = TransactionCount(buys=1, sells=1)
         transactions = PairTransactionCounts(
@@ -550,11 +565,17 @@ def mock_polling_stream(mock_http_client):
 
 @pytest.fixture
 def batch_test_addresses():
-    """Provide batch test addresses"""
+    """Provide batch test addresses - returns Ethereum addresses by default"""
+    return [f"0x{i:040x}" for i in range(100)]
+
+
+@pytest.fixture
+def batch_test_addresses_by_chain():
+    """Provide batch test addresses by chain"""
     return {
-        "ethereum": [f"0x{i:040x}" for i in range(1, 51)],  # 50 Ethereum addresses (can test limit exceed)
-        "solana": [f"sol_token_{i}" for i in range(1, 51)],  # 50 Solana addresses
-        "bsc": [f"0xbsc{i:037x}" for i in range(1, 51)],  # 50 BSC addresses
+        "ethereum": [f"0x{i:040x}" for i in range(100)],
+        "solana": [f"{'A' * 32}{'BCDEFGHJKLMNPQRSTUVWXYZ'[i % 23]}{i % 9 + 1!s}" for i in range(100)],
+        "bsc": [f"0xbsc{i:037x}" for i in range(100)],
     }
 
 
