@@ -160,23 +160,23 @@ class HttpClientCffi:
     ) -> Union[list, dict, None]:
         """Parse JSON response with proper error handling and logging"""
         content_type = response.headers.get("content-type", "")
-        
+
         if "application/json" not in content_type:
             # Non-JSON response
             content_preview = (
-                response.content[:200].decode("utf-8", errors="replace") 
+                response.content[:200].decode("utf-8", errors="replace")
                 if response.content else ""
             )
-            
+
             parse_context = context.copy()
             parse_context.update({
                 "expected_json": True,
                 "received_content_type": content_type,
                 "content_preview": content_preview,
             })
-            
+
             self.logger.warning("Received non-JSON response when JSON expected", context=parse_context)
-            
+
             raise HttpResponseParsingError(
                 method,
                 url,
@@ -184,28 +184,28 @@ class HttpClientCffi:
                 content_preview,
                 original_error=Exception(f"Expected JSON response but got {content_type}")
             )
-        
+
         try:
             return orjson.loads(response.content)
         except Exception as e:
             content_preview = (
-                response.content[:200].decode("utf-8", errors="replace") 
+                response.content[:200].decode("utf-8", errors="replace")
                 if response.content else ""
             )
-            
+
             parse_context = context.copy()
             parse_context.update({
                 "parse_error": str(e),
                 "content_preview": content_preview,
             })
-            
+
             self.logger.error(
                 "Failed to parse JSON response: %s",
                 str(e),
                 context=parse_context,
                 exc_info=True
             )
-            
+
             raise HttpResponseParsingError(
                 method, url, content_type, content_preview, original_error=e
             ) from e
@@ -228,12 +228,10 @@ class HttpClientCffi:
 
                     # Warm up connection
                     warmup_start = time.time()
-                    warmup_success = False
                     try:
                         warmup_url = self._create_absolute_url(self.warmup_url)
                         response = await self._primary_session.get(warmup_url)
                         if response.status_code == 200:
-                            warmup_success = True
                             warmup_duration = time.time() - warmup_start
 
                             session_context.update(
