@@ -1,6 +1,6 @@
 [project]
 name = "dexscreen"
-version = "0.0.2"
+version = "0.0.4"
 description = "Python wrapper for Dexscreener API with stable HTTP support"
 authors = [{ name = "solanab", email = "whiredj@gmail.com" }]
 readme = "README.md"
